@@ -1,0 +1,33 @@
+---
+title: "Text Analysis"
+author: "Brandon Sherman"
+date: "July 2018"
+output: html_document
+---
+
+Now that we've analyzed Rush's musical development, what about lyrics?
+One thing that should make this a straightforward task is that Neil
+Peart has been Rush's sole lyricist since 1975.  For this reason I'll
+be excluding Rush's debut, along with Best I Can and In the End from
+Fly By Night, as Neil Peart did not write any of the lyrics.
+
+
+```{r prep}
+library(dplyr)
+library(readr)
+library(lubridate)
+library(ggplot2)
+library(ggrepel)
+library(ggforce)
+library(patchwork)
+library(here)
+library(stringr)
+library(tidyr)
+library(glue)
+library(extrafont)
+library(forcats)
+
+source(here("lib", "vars.R"))
+
+rush_albums <- readRDS(RUSH_ALBUMS)
+```

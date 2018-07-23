@@ -1,0 +1,209 @@
+---
+title: "Initial Plotting"
+author: "Brandon Sherman"
+date: "July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Rush is one of the most prolific progressive rock bands in history.
+They started out as a hard rock band in the vein of Led Zeppelin, then
+moved into progressive rock, then added synthesizers in the 80s, and
+added hard rock again in the 90s and 00s.
+
+In this analysis, we want to understand what musical features
+differentiate the various recording periods of Rush.
+
+We've already downloaded the relevant data and munged it into tibbles
+thanks to the wonderful `spotifyr` package.  Now that we have the data, 
+let's do some cleanup.  I suspect we'll see some duplicate albums and 
+will have to remove some features.
+
+```{r prep}
+library(dplyr)
+library(readr)
+library(lubridate)
+library(ggplot2)
+library(ggrepel)
+library(ggforce)
+library(patchwork)
+library(here)
+library(stringr)
+library(tidyr)
+library(glue)
+library(extrafont)
+library(forcats)
+
+source(here("lib", "vars.R"))
+
+rush_albums <- readRDS(RUSH_ALBUMS)
+```
+
+First let's plot each variable over time.  To do this, we need to
+first gather all of the musical feature columns.  Then we'll make a
+facetted plot.
+
+There's one issue though, which is that we have 165 tracks.  That's a
+lot of dots for a time series!  We'll calculate a weighted average of
+each of these variables at the album level.  The weighting will be by
+track duration because Rush has many long songs that dominate most of
+an album.  The title track of 2112 should not be weighted the same as 
+A Passage to Bangkok.
+
+```{r plot_data_prep}
+album_duration_dat <- rush_albums %>%
+    group_by(album_name) %>%
+    summarize(album_duration_ms = sum(duration_ms))
+
+album_stats <- rush_albums %>%
+    group_by(album_name) %>%
+    gather(feature, value,
+           danceability, energy, acousticness, instrumentalness, valence, tempo) %>%
+    inner_join(album_duration_dat, by = "album_name") %>% 
+    mutate(track_weight = duration_ms / album_duration_ms,
+           weighted_value = track_weight * value) %>%
+    group_by(album_name, album_release_date, feature) %>% 
+    summarize(value = mean(value),
+              weighted_value = sum(weighted_value)) %>%
+    ungroup() %>% 
+    mutate(feature = Hmisc::capitalize(feature)) %>% ## acousticness -> Acousticness
+    arrange(album_release_date)
+```
+
+```{r make_plot}
+## Thanks to
+## http://www.2112.net/rushfonts/
+## for the font!
+for (i in seq_len(3)) {
+    album_stats_plots <- album_stats %>%
+        rename(Feature = feature) %>% 
+        ggplot(aes(x = album_release_date, y = weighted_value, label = album_name)) +
+        geom_line(aes(color = Feature)) +
+        geom_label_repel(alpha = 0.6, size = 2) +
+        facet_wrap_paginate(~ Feature, scales = "free", ncol = 1, nrow = 2, page = i) +
+        labs(title = "Musical development of Rush over time"
+             ) +
+        theme(plot.title = element_text(family = "Working Man", size = 22),
+              legend.position = "none") +
+        xlab("Release Date") +
+        ylab("Value")
+
+    album_stats_plots %>%
+        ggsave(here("figures", glue("feature_plot_{i}.png")), ., width = 7, height = 7, units = "in")
+}
+
+```
+
+
+Here's what we see:
+
+* Moving Pictures is not only the most instrumental Rush album, but it
+  marks a peak at which Rush's music got less instrumental.  As they
+  added more synthesizers to fit in with their 80s contemporaries, Rush 
+  also added more vocals to the mix.  However Rush has never been close to 
+  an instrumental band, as we see no "Instrumentalness" values above 0.2  
+  For reference, the highest possible "Instrumentalness" value is 1.
+  
+* Caress of Steel is Rush's most acoustic album, and also has among
+  the lowest danceability and energy scores.
+  
+* Power Windows, which is dominated by synthesizers and fast tracks,
+  has high energy and low acousticness.
+  
+* Rush's music has gotten slower over time.  It's interesting how
+after Power Windows, when Rush decided that they didn't want to be a
+progressive rock band dominated by synthesizers, Rush's music quickly 
+started dropping in average tempo over the course of their next four 
+albums, reaching 120BPM on Counterparts and staying approximately 
+there until Clockwork Angels.
+
+There is one data point that I am very curious about.  Why does Fly By
+Night have such a high instrumentalness score when all of its tracks
+have lyrics?  Let's take a look at the individual track values for the
+album.
+
+```{r fly_by_night}
+rush_albums %>%
+    filter(album_name == "Fly By Night") %>%
+    select(track_name, instrumentalness, duration_ms)
+```
+
+My suspicion is that it's being driven by By-Tor and the Snow Dog,
+which is the longest track on the album and has long instrumental
+sections.  Similarly, Anthem and Best I Can have lyrics but lean
+instrumental.  Anthem has no vocals until 54 seconds into a four
+minute song.  Best I Can has similar instrumental sections.
+
+
+
+What's the distribution of song lengths per album?
+
+
+```{r}
+rush_albums_for_circle_plot <- rush_albums %>%
+    group_by(album_name) %>%  ## Order and label the tracks for each album descendingly by length
+    arrange(desc(duration_ms)) %>%
+    mutate(rn = row_number()) %>%
+    ungroup() %>% 
+    mutate(minutes = floor(duration_ms / 6e4)) %>%
+    mutate(seconds = floor(duration_ms / 1000) %% 60) %>%
+    mutate(label = glue("{track_name}\n{minutes}:{seconds}")) %>% 
+    arrange(album_release_date)
+
+rush_albums_for_circle_plot %>% 
+    ggplot(aes(x = fct_reorder(album_name, album_release_date, .desc = TRUE), ## TRUE because coord_flip
+               y = rn, size = duration_ms, color = album_name)) +
+    geom_point() +
+    coord_flip() +
+    ggtitle("Track lengths by album") +
+    xlab("") +
+    theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+    guides(color = FALSE) +
+    annotate("text", x = "2112", y = 1, label = "2112\n20:34", size = 2) +
+    annotate("text", x = "Hemispheres", y = 1, label = "Cygnus X-1\n18:08", size = 2) +
+    annotate("text", x = "Caress Of Steel", y = 1.1, label = "The Fountain of\nLamneth\n19:57", size = 2)
+
+## bars
+
+## Thanks to
+## https://stackoverflow.com/a/50173616
+## for how to make mm:dd labels
+
+for (i in seq_len(5)) {
+    
+    duration_plot <- rush_albums_for_circle_plot %>%
+        mutate(duration_ms = as.difftime(duration_ms / 1000, units = "secs")) %>%
+        ## Truncate some long track names
+        mutate(track_name = if_else(grepl("2112", .$track_name), "2112", track_name),
+               track_name = if_else(grepl("La Villa Strangiato", .$track_name), "La Villa Strangiato", track_name)) %>%
+        mutate(album_name = fct_reorder(album_name, album_release_date)) %>% 
+        ggplot(aes(x = fct_reorder(track_name, duration_ms),
+                   y = duration_ms, color = album_name, fill = album_name)) +## TRUE because coord_flip
+        geom_col(width = 0.8) +
+        scale_y_time(labels = function(l) strftime(l, "%M:%S")) +
+        facet_wrap_paginate(~ album_name, scales = "free_y", drop = TRUE, ncol = 1, nrow = 4, page = i) +
+        ggtitle("Rush Track Lengths by Album") +
+        ylab("Track Length") +
+        xlab("") +
+        coord_flip() +
+        theme(plot.title = element_text(family = "Working Man", size = 22),
+              legend.position = "none")
+
+    duration_plot %>% 
+        ggsave(here("figures", glue("duration_plot_{i}.png")), ., height = 7, width = 7)
+}
+
+```
+
+## Output
+
+```{r output}
+saveRDS(album_stats, ALBUM_STATS_OUTPUT)
+```

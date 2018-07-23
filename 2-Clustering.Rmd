@@ -1,0 +1,103 @@
+---
+title: "Clustering"
+author: "Brandon Sherman"
+date: "July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Now that we've looked at Rush's musical development over time, let's
+do some hierarchical clustering based on music features.  This is
+heavily inspired by, if not plagiaried, directly from [Alyssa
+Goldberg's similar analysis on David Bowie albums](https://twitter.com/WireMonkey/status/1009915034246565891?s=19).
+
+```{r prep}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(here)
+library(rpart)
+library(dendextend) ## for colors
+library(circlize) ## one of the only times where circles are nice
+
+source(here("lib", "vars.R"))
+
+album_stats <- readRDS(ALBUM_STATS)
+```
+
+First of all, our data is in long format where each row is "musical
+feature of an album".  We need it to be in wide format, where each row
+is "all musical features for an album".  To do this, let's use
+`tidyr::spread`.  After all, it's the opposite operation of
+`tidyr::gather`, which we utilized when prepping this data.
+
+We'll make two frames: One where the values have been weighted by
+track length, and another where they haven't been.  Since `hclust` needs 
+a matrix of values, we'll also do that transformation here.
+
+Since the process to make both data frames is virtually the same, I'll
+write a function that uses `dplyr`'s new quasiquotation features.  I'd
+like to pass multiple columns for `col_to_drop`, but sadly this seems like 
+more trouble than it's worth right now.
+
+```{r data_prep}
+prep_df_for_cluster <- function(dat, val_col, col_to_drop) {
+    ## Given a data frame, a value column, and a bunch of columns to drop,
+    ## return a data.frame appropriate for clustering.
+
+    val_col <- enquo(val_col)
+    col_to_drop <- enquo(col_to_drop)
+    
+    dat %>%
+        select(-!!col_to_drop, -album_release_date) %>% 
+        spread(feature, !!val_col) %>%
+        ## mutate_if(is.numeric, scale) %>%
+        mutate(Tempo = scale(Tempo)) %>% 
+        column_to_rownames("album_name") %>%
+        as.data.frame()
+}    
+
+rush_albums_for_weighted_cluster <- prep_df_for_cluster(album_stats, weighted_value, value)
+rush_albums_for_unweighted_cluster <- prep_df_for_cluster(album_stats, value, weighted_value)
+```
+
+
+## Clustering
+
+```{r clustering}
+dend <- as.dendrogram(hclust(dist(rush_albums_for_weighted_cluster), method = "single")) %>%
+    color_branches(k = 5) %>%
+    color_labels(k = 5)
+
+circlize_dendrogram(dend, labels_track_height = 0.4, dend_track_height = 0.4)
+dev.copy(png, here("figures", "weighted_cluster_plot.png"))
+dev.off()
+
+
+unweighted_dend <- as.dendrogram(hclust(dist(rush_albums_for_unweighted_cluster), method = "complete")) %>%
+    color_branches(k = 4) %>%
+    color_labels(k = 4)
+
+circlize_dendrogram(unweighted_dend, labels_track_height = 0.3, dend_track_height = 0.3)
+dev.copy(png, here("figures", "unweighted_cluster_plot.png"))
+dev.off()
+```
+
+Interestingly enough, using the *unweighted* dendrogram leads to
+better clusters than the weighted one.  I suspect it's because we're
+doing additional transformations on transformed data.
+
+In the unweighted dendrogram, we see the following clusters:
+
+* Purple:  hard rock with some weird effects
+* Red:  80s albums with lots of synthesizers
+* Yellow-Green:  Early hard rock
+* Green:  Later hard rock
+
+Followup to last week's work tracking Rush's musical development over
+time. Here's a hierarchical clustering of Rush albums. Albums in the
+same color are similar to each other.
