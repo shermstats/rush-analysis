@@ -16,13 +16,32 @@ They started out as a hard rock band in the vein of Led Zeppelin, then
 moved into progressive rock, then added synthesizers in the 80s, and
 added hard rock again in the 90s and 00s.
 
-In this analysis, we want to understand what musical features
-differentiate the various recording periods of Rush.
+This makes them a great candidate for a musical analysis!  Besides their 
+complex music development and versatility, other reasons to analyze Rush 
+in particular are:
+
+* They are among my favorite bands and were my first ever concert back in 2007.  So 
+I have domain expertise.
+
+* All of their studio albums are on Spotify.  This means there are no gaps.  Do you hear 
+me Robert Fripp?
+
+* With the exception of their debut and two tracks on Fly By Night, they have one lyricist.
+
+* Unlike some other candidates (*cough*milesdavis*cough*) there are no albums by other
+artists that we need to consider, and there is no dispute about which albums 
+to include.  Rush's 19 studio albums are canonically and unambiguously their 19 studio 
+albums according to every fan on the planet.
+
+* Not a lot of data cleanup.  There is no deduping necessary and a bare minimal amount 
+of cleaning up text.
 
 We've already downloaded the relevant data and munged it into tibbles
-thanks to the wonderful `spotifyr` package.  Now that we have the data, 
-let's do some cleanup.  I suspect we'll see some duplicate albums and 
-will have to remove some features.
+thanks to the wonderful `spotifyr` package.  See `DownloadRush.R` for all the 
+dirty work.
+
+In this initial notebook, we want to understand what musical features
+differentiate the various recording periods of Rush.
 
 ```{r prep}
 library(dplyr)
@@ -52,8 +71,8 @@ There's one issue though, which is that we have 165 tracks.  That's a
 lot of dots for a time series!  We'll calculate a weighted average of
 each of these variables at the album level.  The weighting will be by
 track duration because Rush has many long songs that dominate most of
-an album.  The title track of 2112 should not be weighted the same as 
-A Passage to Bangkok.
+an album.  The title track of 2112, which is 20 minutes long, should not 
+be weighted the same as A Passage to Bangkok, which is 3 minutes long.
 
 ```{r plot_data_prep}
 album_duration_dat <- rush_albums %>%
