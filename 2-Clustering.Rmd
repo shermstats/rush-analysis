@@ -82,7 +82,7 @@ unweighted_dend <- as.dendrogram(hclust(dist(rush_albums_for_unweighted_cluster)
     color_branches(k = 4) %>%
     color_labels(k = 4)
 
-circlize_dendrogram(unweighted_dend, labels_track_height = 0.3, dend_track_height = 0.3)
+circlize_dendrogram(unweighted_dend, labels_track_height = 0.4, dend_track_height = 0.4)
 dev.copy(png, here("figures", "unweighted_cluster_plot.png"))
 dev.off()
 ```
@@ -101,3 +101,52 @@ In the unweighted dendrogram, we see the following clusters:
 Followup to last week's work tracking Rush's musical development over
 time. Here's a hierarchical clustering of Rush albums. Albums in the
 same color are similar to each other.
+
+
+## Robustness Checking
+
+Now suppose that Rush decided to reunite release a brand new album
+that's considerably more poppy and Spanish than what they put out in
+the past four decades.  For the same of argument, let's call this new
+track "Despacito".  I'm going to query Despacito, add it to Rush's
+discography, and see how it influences the clustering.  If these are 
+good clusters, then they should be virtually the same with or without 
+Despacito.
+
+I'll also do it for Africa by Toto because why not?
+
+
+```{r}
+library(spotifyr)
+
+get_single_track_features <- function(track_name, slice_num) {
+    
+    get_tracks(track_name) %>%
+        slice(slice_num) %>% 
+        get_track_audio_features() %>%
+        select(danceability, energy, acousticness, instrumentalness, valence, tempo) %>%
+        mutate(album_name = track_name) %>%
+        gather(feature, value, acousticness, danceability, energy, instrumentalness, tempo, valence) %>%
+        mutate(feature = Hmisc::capitalize(feature)) %>%
+        mutate(weighted_value = value)
+}    
+
+despacito <- get_single_track_features("Despacito", 2)
+africa <- get_single_track_features("Africa", 1) %>% mutate(album_name = "Africa by Toto")
+
+
+album_stats_with_new_tracks_for_unweighted_clustering <- album_stats %>%  ## Phew!
+    bind_rows(africa) %>%
+    bind_rows(despacito) %>% 
+    prep_df_for_cluster(value, weighted_value)
+
+
+unweighted_dend_with_new_tracks <- as.dendrogram(hclust(dist(album_stats_with_new_tracks_for_unweighted_clustering), method = "complete")) %>%
+    color_branches(k = 6) %>%
+    color_labels(k = 6)
+
+circlize_dendrogram(unweighted_dend_with_new_tracks, labels_track_height = 0.4, dend_track_height = 0.4)
+```
+
+Despacito and Africa are their own cluster.  Which makes sense because
+I've never been to a club that played Tom Sawyer by Rush.
