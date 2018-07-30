@@ -1,0 +1,227 @@
+---
+title: "Download Rush Data"
+author: "Brandon Sherman"
+date: "July 2018"
+output: html_document
+---
+
+## Introduction
+
+Rush is one of the most prolific progressive rock bands in history.
+They started out as a hard rock band in the vein of Led Zeppelin, then
+moved into progressive rock, then added synthesizers in the 80s, and
+added hard rock again in the 90s and 00s.
+
+This makes them a great candidate for a musical analysis!  Besides their 
+complex music development and versatility, other reasons to analyze Rush 
+in particular are:
+
+* They are among my favorite bands and were my first ever concert back in 2007.  So 
+I have domain expertise.
+
+* All of their studio albums are on Spotify.  This means there are no gaps.  Do you hear 
+me Robert Fripp?
+
+* With the exception of their debut and two tracks on Fly By Night, they have one lyricist.
+
+* Unlike some other candidates (*cough*milesdavis*cough*) there are no albums by other
+artists that we need to consider, and there is no dispute about which albums 
+to include.  Rush's 19 studio albums are canonically and unambiguously their 19 studio 
+albums according to every fan on the planet.
+
+* Not a lot of data cleanup.  There is no deduping necessary and a bare minimal amount 
+of cleaning up text.
+
+## Purpose
+
+In this RMarkdown document, we do the following:
+
+* Download Rush's 19 canonical studio albums using the wonderful [`spotifyr` package](https://github.com/charlie86/spotifyr) developed by [Charlie Thompson](https://twitter.com/_RCharlie)
+* Do some basic cleanup
+* Export the resulting files to be analyzed
+
+## Data Prep
+
+### Spotify Developer Setup
+Before you do anything, [sign up to be a Spotify developer](https://developer.spotify.com/dashboard/).  You will be assigned a client ID and a client secret you need to query the Spotify API.  Store those 
+credentials in your `.Renviron` file as follows:
+
+    SPOTIFY_CLIENT_ID="{your_client_id}"
+    SPOTIFY_CLIENT_SECRET="{your_client_secret}"
+    
+### Download and Cleanup
+
+First we download the relevant data using `spotifyr::get_discography()`.  It pulls [all audio features](https://developer.spotify.com/documentation/web-api/reference/tracks/get-audio-features/) for the artist's discography from the Spotify API, along with lyrics from the 
+Genius API using the [`geniusR` package](https://github.com/JosiahParry/geniusR).  If you're 
+wondering what audio features are, I will explain more in the first analysis I perform.
+
+Because `spotifyr::get_discography()` takes a while to run, I wrapped it in a function that caches 
+the original data file if it's stored.  Because this is a one-off prep function that I have no 
+intention of using anywhere else, I have made no effort to generalize it or prevent it from being 
+used outside of its intended purpose.
+
+```{r read_data}
+library(readr)
+library(dplyr)
+library(spotifyr)  ## Development version
+library(tidyr)
+library(lubridate)
+library(here)
+
+source(here("lib", "vars.R"))  ## Contains paths we need for exporting
+
+rush_studio_album_names <- c("rush", "fly by night",
+"caress of steel", "2112", "a farewell to kings", "hemispheres",
+"permanent waves", "moving pictures", "signals",
+"grace under pressure", "power windows", "hold your fire", "presto",
+"roll the bones", "counterparts", "test for echo", "vapor trails",
+"snakes & arrows", "clockwork angels")
+
+get_rush_dat <- function(input_file = ORIGINAL_DAT) {
+    ## Look for the cached file because this takes a really long time to query
+    
+    if (file.exists(ORIGINAL_DAT)) {
+        cat("Reading in file...\n")
+        dat <- readRDS(ORIGINAL_DAT)
+    } else {
+        cat("Getting album data from Spotify...\n")
+        dat <- get_discography("Rush") %>%
+            ungroup()
+        
+        saveRDS(dat, ORIGINAL_DAT)
+    }
+
+    return(dat)
+}    
+
+original_rush_dat <- get_rush_dat()
+
+original_rush_dat %>%
+  glimpse
+```
+
+Phew!  It worked.  There's even a `lyrics` column that contains the lyrics to every song 
+in Rush's discography.
+
+Now that we have the data read in, let's do some cleanup.  I have gone back and changed 
+this file a few times to reflect new cleaning that needed to be done.  I will not be 
+explaning these decisions in this document.  Here's what needs to be done:
+
+* Throw out irrelevant columns.  This includes "liveness" (we're only looking at studio 
+albums), URLs we don't need, and some columns where every value is the same.
+* Remove bonus tracks (which are often live)
+* The title track of 2112 has a bunch of subtitles, which makes plotting the name very 
+difficult.  I'll remove those.
+* "Remastered" makes track names too long, so remove it.
+* Convert character string dates to Date objects
+* Move estimated release dates and actual release dates to the same column
+
+```{r cleanup}
+rush_dat <- original_rush_dat %>% 
+    filter(tolower(album_name) %in% rush_studio_album_names) %>% 
+    filter(!grepl("- Live", track_name)) ## Remove bonus tracks
+
+## Album and track info
+rush_albums <- rush_dat %>%
+    select(artist_name, artist_uri, starts_with("album"), track_name, track_uri, track_n, danceability:key_mode, lyrics) %>%
+    select(-album_img, -album_type, -liveness) %>% ## remove redundant columns
+    mutate(album_release_date = if_else(!is.na(ymd(album_release_date)), ymd(album_release_date), ymd(album_release_year))) %>% 
+    select(-album_release_year) %>% 
+    mutate(track_name = gsub(" - Remastered", "", .$track_name),
+           track_name = if_else(grepl("^2112", .$track_name), "2112", track_name))
+
+rush_albums %>%
+  glimpse
+```
+
+Looks like everything worked well.  `release_date` looks like a date and we don't see any redundant 
+columns.  Let's save it and move onto grabbing audio analysis info.
+
+```{r}
+rush_albums %>%
+    saveRDS(OUTPUT_FEATURES)
+```
+
+#### Audio Analysis download
+
+Spotify also has an [Audio Analysis API](https://developer.spotify.com/documentation/web-api/reference/tracks/get-audio-analysis/), which is different from its Audio Features API.  The Audio Analysis 
+API contains in-depth features for individual segments of tracks.  Once we start 
+digging into the audio analysis features, I'll explain more about what's 
+contained in them.
+
+Like `get_rush_dat`, I'm wrapping the code to get this data in a function that caches the data if it
+doesn't exist, and reads it in otherwise because this code takes an inordinately long amount of time 
+to run.  Here's what the function does when you don't have the audio analysis file cached:
+
+For each track, do the following via `purrr::map_df`:
+
+1.  Get the audio analysis from the Spotify API.
+2.  Convert it to a tibble with each part of the audio analysis as a list column.  Since there are 
+seven parts that are always returned in a particular order, I just assign them labels in said 
+order.  This gives us a tidy tibble where every row corresponds to an audio analysis feature of 
+a given track.
+3.  Add the audio analysis info back to the original data frame, and throw out any information 
+that isn't track and album metadata.  This is to conserve space, since if we want to combine 
+audio analysis with track-level audio features, we can easily just join to the original data 
+using the `*_uri` columns.
+
+
+If it's your first time running this function, it will probably take at least ten minutes.  To help
+the process along (and because it's just really fun), I run `beepr::beep` once the data is done being
+prepared.  It's a wonderful function that can play any of a variety of sound effects when it's 
+finished.  I personally have it set to the Super Mario Bros. End of Level sound.
+
+```{r audio_analysis}
+library(jsonlite)
+library(purrr)
+library(beepr)
+
+get_audio_analysis_df <- function(dat, output_file = OUTPUT_AUDIO_ANALYSIS) {
+  
+    if (file.exists(output_file)) {
+      cat("Audio analysis file exists.  Reading...\n")
+      audio_analysis_df <- readRDS(output_file)
+    } else {
+      cat("Audio analysis file does not exist.  Generating now\n")
+      audio_analysis_df <- map_df(dat$track_uri, function(x) {
+          audio_analysis <- get_track_audio_analysis(x)    
+          return(tibble(track_uri = x,
+                        audio_analysis = audio_analysis,
+                        content_type = c("meta", "track", "bars", "beats",
+                                         "tatums", "sections", "segments")))
+      })
+  
+      album_track_info <- dat %>%
+          select(album_uri, album_name, track_name, track_uri, track_n)
+  
+      audio_analysis_col <- audio_analysis_df %>% select(audio_analysis)
+  
+      audio_analysis_df <- audio_analysis_df %>%
+          select(-audio_analysis) %>%  ## to avoid issues with distinct
+          inner_join(album_track_info, by = "track_uri") %>%
+          distinct() %>% 
+          bind_cols(audio_analysis_col)
+      
+      audio_analysis_df %>%
+        saveRDS(output_file)
+      
+      beep(8)
+    
+    }
+  
+  return(audio_analysis_df)
+    
+}
+
+rush_audio_analysis <- get_audio_analysis_df(rush_albums)
+
+rush_audio_analysis %>%
+  glimpse()
+```
+
+And there we have it!  Everything has been cleaned up and exported succesfully.
+
+## Next Steps
+
+In the next notebook, we will make some plots of musical features.  We'll show Rush's musical 
+development over time using a variety of useful `ggplot2` extensions.
