@@ -24,7 +24,7 @@ me Robert Fripp?
 
 * With the exception of their debut and two tracks on Fly By Night, they have one lyricist.
 
-* Unlike some other candidates (*cough*milesdavis*cough*) there are no albums by other
+* Unlike some other candidates (**cough**milesdavis**cough**) there are no albums by other
 artists that we need to consider, and there is no dispute about which albums 
 to include.  Rush's 19 studio albums are canonically and unambiguously their 19 studio 
 albums according to every fan on the planet.
@@ -56,15 +56,26 @@ Genius API using the [`geniusR` package](https://github.com/JosiahParry/geniusR)
 wondering what audio features are, I will explain more in the first analysis I perform.
 
 Because `spotifyr::get_discography()` takes a while to run, I wrapped it in a function that caches 
-the original data file if it's stored.  Because this is a one-off prep function that I have no 
+the original data file if it's stored.  As this is a one-off prep function that I have no 
 intention of using anywhere else, I have made no effort to generalize it or prevent it from being 
 used outside of its intended purpose.
+
+Other packages I am using here:
+
+* `readr` - A package that reads and writes files better than base R's equivalents.  If it runs into 
+parsing issues, it tells you which lines had the issues.  Most importantly, it does not treat 
+strings as factors!
+
+* `dplyr` - For tidy data manipulation.  If you've never used dplyr before, [what are you waiting for?!](https://dplyr.tidyverse.org/)
+
+* `lubridate` - Functions for datetime manipulation
+
+* `here` - For working directory detection.  [A much better alternative to `getwd`](https://gist.github.com/jennybc/362f52446fe1ebc4c49f).
 
 ```{r read_data}
 library(readr)
 library(dplyr)
 library(spotifyr)  ## Development version
-library(tidyr)
 library(lubridate)
 library(here)
 
@@ -135,7 +146,8 @@ rush_albums %>%
 ```
 
 Looks like everything worked well.  `release_date` looks like a date and we don't see any redundant 
-columns.  Let's save it and move onto grabbing audio analysis info.
+columns.  Let's save it and move onto grabbing audio analysis info.  We save as an RDS because even 
+though `feather` is made for temporary cacheing, it can't handle list columns.
 
 ```{r}
 rush_albums %>%
@@ -225,3 +237,14 @@ And there we have it!  Everything has been cleaned up and exported succesfully.
 
 In the next notebook, we will make some plots of musical features.  We'll show Rush's musical 
 development over time using a variety of useful `ggplot2` extensions.
+
+## Question
+
+I know many of you are questioning why I called this `0-DownloadRush.Rmd`.  I did this for two 
+reasons:
+
+1.  I originally wrote this as a script and didn't want to rename some of the other files with 
+number prefixes I wrote.
+
+2.  Since the file starting with 1 is where the analysis begins, I started this file with 0 because 
+this notebook involves no analysis whatsoever.
