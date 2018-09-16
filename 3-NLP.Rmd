@@ -5,19 +5,28 @@ date: "July 2018"
 output: html_document
 ---
 
-Now that we've analyzed Rush's musical development, what about lyrics?
-One thing that should make this a straightforward task is that Neil
-Peart has been Rush's sole lyricist since 1975.  For this reason I'll
-be excluding Rush's debut, along with Best I Can and In the End from
-Fly By Night, as Neil Peart did not write any of the lyrics.
+Now that we've analyzed Rush's musical development, what about lyrics?  Most 
+natural language processing techniques exist for the analysis of documents, 
+articles, or websites.  A song is a considerably smaller piece of text than 
+a typical Wikipedia article, and has different textual properties, such as 
+heavy repetition as an artistic device.  As a result this analysis is going to 
+be fairly rusty, but it'll still be interesting.
+
+
+One thing that's convenient about analyzing Rush lyrics is that a single author - Neil
+Peart - has been Rush's sole lyricist since 1975. For this reason I'll be excluding 
+Rush's debut, along with Best I Can and In the End from Fly By Night, as Neil Peart 
+did not write any of the lyrics.
+
+I'll also exclude [instrumental songs](https://en.wikipedia.org/wiki/List_of_Rush_instrumentals).  
+Although they're fun to hum along to, their lack of lyrics mean that they sadly will not be part 
+of this analysis.
 
 
 ```{r prep}
 library(dplyr)
 library(readr)
-library(lubridate)
 library(ggplot2)
-library(ggrepel)
 library(ggforce)
 library(patchwork)
 library(here)
@@ -26,8 +35,248 @@ library(tidyr)
 library(glue)
 library(extrafont)
 library(forcats)
+library(tidytext)
+library(purrr)
 
 source(here("lib", "vars.R"))
 
 rush_albums <- readRDS(RUSH_ALBUMS)
+
+instrumental_songs <- c("la villa strangiato", "yyz", "where's my thing?", "leave that thing alone", "limbo",
+                        "the main monkey business", "hope", "malignant narcissism")
+
+rush_albums_for_lyrics <- rush_albums %>% 
+    filter(album_name != "Rush",  ## Exclude all lyrics not written by Neil Peart
+           (!(track_name %in% c("Best I Can", "In The End")))) %>%
+    filter(!(tolower(track_name) %in% instrumental_songs)) %>%
+    select(album_name, track_n, track_name, lyrics)
+```
+
+One big issue here is that the lyrics for each track are in a tibble,
+when they should be in one giant string.  Let's fix that.  There is also 
+punctuation and capitalization to remove, but the `unnest_tokens` function 
+will handle that automatically.
+
+I debated whether to drop repeated lines, but decided against it.  While repeated lines will undoubtedly 
+influence counts and frequencies, this is acceptable because repeated lines are clearly important in the 
+context of a song.  We will see later on that this was a bad idea and will fix it.
+
+```{r get_lyrics}
+lyrics_dat <- rush_albums_for_lyrics %>%
+    mutate(lyrics = map(.$lyrics, as.data.frame)) %>%  ## unnest gets annoyed if you give it a tibble instead of a data.frame
+    unnest()
+
+lyrics_dat
+```
+
+This is convenient.  Lyrics are split into lines, which are already ordered.  This will make 
+analyzing small pieces of text straightforward.  But what about if we want to look at lyrics for 
+an entire track, or even an entire album?  Let's make data frames to handle that.
+
+```{r}
+track_lyrics_dat <- lyrics_dat %>%
+  group_by(album_name, track_n, track_name) %>%
+  summarize(lyric = paste(lyric, collapse = " ")) %>%
+  ungroup()
+
+album_lyrics_dat <- track_lyrics_dat %>%
+  group_by(album_name) %>%
+  summarize(lyric = paste(lyric, collapse = " ")) %>%
+  ungroup()
+```
+
+## Word Importance
+
+For each album, what words are most "important"?  We will analyze importance via *tf-idf*.  *tf-idf* is 
+the product of two metrics: *term frequency* (tf), which is the number of times a term appears in a 
+document, and the *inverse document frequency* (idf), which is equal to $\ln(n_{doc} / n_{doc~with~term})$ 
+(thanks again David and Julia!).  The idea is that words that are more common in a given document and also 
+less common in other documents must be important.  The `bind_tf_idf` function from the `tidytext` package 
+automatically appends `tf-idf` to a data frame of tokens.
+
+What are tokens?  A *token* is a unit of language.  The process of *tokenization* 
+is essentially a science and is considerably more difficult than saying "space means new word".  
+I'll tokenize Rush lyrics using the `unnest_tokens` function in the `tidytext` package.
+
+Normally we'd replace *stop words*, which are common words like "the" and "which" without much semantic
+meaning.  But since we're looking at `tf-idf`, and those words are likely to be in all 
+documents, doing so would be redundant.
+
+Normally I would also do some *stemming*, which is the process of getting a word to its base state (e.g. 
+dogs -> dog).  But R's existing tools for stemming leave a lot to be desired.  For example, the 
+`SnowballC` tokenizer thinks that "everything" is a verb ending in "-ing" and represents it as "everyth".
+
+```{r}
+## Order albums by release date, not alphabetically.
+##
+## see p. 32 of "Text Mining With R"
+
+order_rush_albums <- function(dat) {
+  ## Helper function that orders Rush albums in order of 
+  ## release date.  Makes for displays that are ordered
+  ## chronologically.
+  
+  album_num <- rush_albums %>%
+    filter(album_name != "Rush") %>% 
+    select(album_name, album_release_date) %>%
+    distinct() %>%
+    arrange(album_release_date) %>%
+    mutate(album_num = row_number()) %>%
+    select(-album_release_date)
+  
+  dat %>%
+    inner_join(album_num, by = "album_name") %>%
+    mutate(album_name = fct_reorder(album_name, album_num)) %>%
+    select(-album_num)
+}
+
+album_words <- album_lyrics_dat %>%
+  unnest_tokens(word, lyric, strip_punct = TRUE) %>%
+  count(album_name, word, sort = TRUE) %>%
+  ungroup()
+
+total_words <- album_words %>%
+  group_by(album_name) %>%
+  summarize(total = sum(n))
+
+album_words <- album_words %>%
+  left_join(total_words, by = "album_name") %>%
+  bind_tf_idf(word, album_name, n) %>%
+  order_rush_albums()
+
+album_words %>%
+  arrange(desc(tf_idf))
+```
+
+Unsurprisingly, many of the most important words are repeated.  The phrase "closer to the heart" 
+repeats many times in the [song of the same name](https://genius.com/Rush-closer-to-the-heart-lyrics), as 
+does "big money" in the synth-driven ["The Big Money"](https://genius.com/Rush-the-big-money-lyrics) off 
+of Power Windows.  Some other interesting words are "everybody" in Moving Pictures (which is repeated a 
+lot on Vital Signs), "half" in Test For Echo (because it is repeated in "Half the World"), and 0 in Grace 
+Under Pressure (which appears when chanting binary code).
+
+Clearly the amount of repetition is a problem here, as it inflates counts for words that are repeated 
+many times in the same song.  For example, every line of the below lyric begins with "Big Money":
+
+    Big money goes around the world
+    Big money underground
+    Big money got a mighty voice
+    Big money make no sound
+    Big money pull a million strings
+    Big money hold the prize
+    Big money weave a mighty web
+    Big money draw the flies
+
+My proposal to fix this is as follows:
+
+* Remove duplicate lines because they're dominating the tf-idf calculation
+* Tokenize bigrams and trigrams (units of 2 words and 3 words, respectively) and keep track 
+of word position in a line
+* Remove duplicates for words that appear in the same song in the same position many times.  Because "big money" appears at the beginning of many lines, we should count it once to avoid inflating tf-idf counts.
+
+
+We'll continue to focus on bigrams and trigrams from this point forward.  Mostly because going back to 
+unigrams from bigrams is going to be very frustrating.
+
+```{r}
+drop_repetition <- function(dat, n = 2) {
+  dat %>%
+    unnest_tokens(ngram, lyric, token = "ngrams", n = n) %>%
+    group_by(album_name, track_n, track_name, line) %>%
+    mutate(token_position = row_number()) %>%
+    ungroup() %>%
+    select(-line) %>%
+    distinct() %>%
+    select(-token_position)
+}
+
+rush_tf_idf <- function(tokenized_dat) {
+  album_ngrams <- tokenized_dat %>%
+    count(album_name, ngram, sort = TRUE) %>%
+    ungroup()
+
+  total_ngrams <- album_ngrams %>%
+    group_by(album_name) %>%
+    summarize(total = sum(n))
+
+  album_ngrams <- album_ngrams %>%
+    left_join(total_words, by = "album_name") %>%
+    bind_tf_idf(ngram, album_name, n) %>%
+    order_rush_albums()
+  
+  return(album_ngrams)
+}
+
+bigram <- lyrics_dat %>%
+  drop_repetition(n = 2) %>%
+  rush_tf_idf() %>%
+  arrange(-tf_idf)
+
+
+trigram <- lyrics_dat %>%
+  drop_repetition(n = 3) %>%
+  rush_tf_idf() %>%
+  arrange(-tf_idf)
+
+head(bigram)
+head(trigram)
+```
+
+Interesting.  When we look at bigrams, it looks like song titles are still the most common words.  "snow
+dog" on Fly By Night comes from "By-Tor and the Snow Dog", and presumably Rush does not have many songs 
+about snow dogs.  We also see "closer to" (still!) with a term frequency of three.  When we look at 
+trigrams, "closer to the" is towards the top.  We also see "caves of ice" which appears twice in Xanadu 
+from "A Farewell to Kings".
+
+It does not appear that many words appear across albums.  Nevertheless, let's make some plots and see 
+what comes up.
+
+```{r}
+top_10_bigrams <- bigram %>%
+    arrange(desc(tf_idf)) %>%
+    mutate(ngram = factor(ngram, levels = rev(unique(ngram)))) %>%
+    group_by(album_name) %>%
+    top_n(10) %>%
+    ungroup()
+
+for (i in seq_len(3)) {
+  bigram %>%
+    ggplot(aes(ngram, tf_idf, fill = album_name)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap_paginate(~album_name, ncol = 2, nrow = 3, scales = "free", drop = TRUE, page = i) +
+    coord_flip()
+}
+```
+
+When we look at overall Rush albums, the words with the highest *tf-idf* are "money" and "big" 
+from Power Windows.  Presumably this is because the song "The Big Money" [repeats those words many 
+times](https://genius.com/Rush-the-big-money-lyrics).
+
+
+## Sentiment Analysis
+
+Using the wonderful `tidytext` package, which Rush albums are the
+happiest?  Which are the saddest?  First we need to tokenize the data.
+
+```{r}
+tokenized_lyrics_dat <- lyrics_dat %>%
+    inner_join(album_num, by = "album_name") %>%
+    arrange(album_num) %>% 
+    group_by(album_name) %>%
+    arrange(line) %>% 
+    unnest_tokens(word, lyric)
+
+
+afinn <- get_sentiments("afinn")  ## a sentiments lexicon
+sentiments_dat <- tokenized_lyrics_dat %>%
+    inner_join(afinn, by = "word") %>%
+    replace_na(list(score = 0))
+```
+
+Which Rush albums are most positive?  Which are most negative?
+
+```{r}
+sentiments_dat %>%
+    group_by(album_name, word) %>%
+    count(sort = TRUE)
 ```
