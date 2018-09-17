@@ -18,9 +18,8 @@ Peart - has been Rush's sole lyricist since 1975. For this reason I'll be exclud
 Rush's debut, along with Best I Can and In the End from Fly By Night, as Neil Peart 
 did not write any of the lyrics.
 
-I'll also exclude [instrumental songs](https://en.wikipedia.org/wiki/List_of_Rush_instrumentals).  
-Although they're fun to hum along to, their lack of lyrics mean that they sadly will not be part 
-of this analysis.
+I'll also exclude [instrumental songs](https://en.wikipedia.org/wiki/List_of_Rush_instrumentals).  Although 
+they're fun to hum along to, their lack of lyrics mean that they sadly will not be part of this analysis.
 
 
 ```{r prep}
@@ -144,139 +143,161 @@ album_words <- album_words %>%
   bind_tf_idf(word, album_name, n) %>%
   order_rush_albums()
 
-album_words %>%
-  arrange(desc(tf_idf))
+## Thanks to
+## https://drsimonj.svbtle.com/ordering-categories-within-ggplot2-facets
+## for how to order bars within facets
+reordered_top_tf_idf <- album_words %>%
+  group_by(album_name) %>%
+  top_n(10, tf_idf) %>%
+  ungroup() %>%
+  arrange(album_name, tf_idf) %>%
+  mutate(order = row_number())
+
+ggplot(reordered_top_tf_idf, aes(x = order, y = tf_idf)) +
+  geom_col(aes(color = album_name, fill = album_name), show.legend = FALSE) +
+  facet_wrap(~ album_name, scales = "free_y") +
+  ggtitle("tf-idf of Rush lyrics by album") +
+  xlab("Word") +
+  ylab("tf-idf") +
+  scale_x_continuous(breaks = reordered_top_tf_idf$order, 
+                     labels = reordered_top_tf_idf$word, 
+                     expand = c(0, 0)) +
+  coord_flip()
 ```
 
-Unsurprisingly, many of the most important words are repeated.  The phrase "closer to the heart" 
-repeats many times in the [song of the same name](https://genius.com/Rush-closer-to-the-heart-lyrics), as 
-does "big money" in the synth-driven ["The Big Money"](https://genius.com/Rush-the-big-money-lyrics) off 
-of Power Windows.  Some other interesting words are "everybody" in Moving Pictures (which is repeated a 
-lot on Vital Signs), "half" in Test For Echo (because it is repeated in "Half the World"), and 0 in Grace 
-Under Pressure (which appears when chanting binary code).
+This is interesting!  Remember that `tf-idf` roughly tells us "what words are most important within each album" by 
+comparing occurrence within an album to occurrence outside that album.  So a word that appears a lot in "Fly by Night" 
+and very little in "Roll the Bones" would have high `tf-idf` within Fly by Night.
 
-Clearly the amount of repetition is a problem here, as it inflates counts for words that are repeated 
-many times in the same song.  For example, every line of the below lyric begins with "Big Money":
+Below are the Top 10 highest `tf-idf` words per album.  Note that many of these have more than ten words due to 
+ties.
 
-    Big money goes around the world
-    Big money underground
-    Big money got a mighty voice
-    Big money make no sound
-    Big money pull a million strings
-    Big money hold the prize
-    Big money weave a mighty web
-    Big money draw the flies
+Some initial findings are:
 
-My proposal to fix this is as follows:
+* Caress of Steel has a lot of fantastic imagery.  Notice the presence of words like "necromancer", "mountain", 
+"wraith", "spectres", and "dungeons".  We also see some historical words, like "guillotine" and "bastille", 
+which are undoubtedly in "Bastille Day".
 
-* Remove duplicate lines because they're dominating the tf-idf calculation
-* Tokenize bigrams and trigrams (units of 2 words and 3 words, respectively) and keep track 
-of word position in a line
-* Remove duplicates for words that appear in the same song in the same position many times.  Because "big money" appears at the beginning of many lines, we should count it once to avoid inflating tf-idf counts.
+* Hemispheres contains a lot of political and Greek mythological imagery.  "Divided", "oppression", "equal", 
+and "brothers" appear often.  The top two words, "oaks" and "maples", appear in "The Trees", 
+hich is a song about political disputes.  Other words, like "gods", "olympus", and "dionysus" are clearly 
+religious.
+
+* Permanent Waves contains a lot of decision-making words and words about doing the right thing, likely due 
+to the song "Freewill".  We see "choose", "freewill", and "decide", along with "integrity" and "kindness".  It is an 
+album concerned with doing the right thing.
+
+* Vapor Trails contains a lot of lyrics about traveling, likely because it was the first Rush album after 
+[Neil Peart's tragic loss of his wife and daughter](https://en.wikipedia.org/wiki/Ghost_Rider:_Travels_on_the_Healing_Road).  Notice the presence of the 
+words "earthshine", "rider", "endlessly", and "wilderness".
+
+Some other albums are difficult to classify.  Signals contains a lot of generic words like "he" and "his".  Fly By 
+Night contains a bunch of words that do not seem related to each other.  But it's amazing that we can gleam so much 
+in a bunch of albums!
 
 
-We'll continue to focus on bigrams and trigrams from this point forward.  Mostly because going back to 
-unigrams from bigrams is going to be very frustrating.
+## Topic Modeling
+
+Now that we've found some potential topics with nothing but `tf-idf`, let's do a more substantative analysis.  
+We'll do this analysis on songs instead of albums, as songs are likely to be more internally consistent than albums.  
+We've found some potentially interesting topics by looking at `tf-idf` by eye.  Let's see if a computer 
+will find the same topics.  Or better yet, maybe different ones!  This analysis is heavily based on [the topic 
+modeling chapter of Tidy Text Mining with R](https://www.tidytextmining.com/topicmodeling.html).
+
+We'll do this with **Latent Dirichlet Allocation** (LDA, which is not to be confused with "linear discriminant 
+analysis for the other statisticians out there.")  LDA assumes that every document (album) in your corpus consists 
+of some mixture of topics, which can overlap between documents.  The same words can appear in multiple topics.  So 
+we have a $word_i \in topic_j \in document_k$ relationship.  The actual math is far more technical than this and 
+if you're interested, [it's all in the Wikipedia article](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation).
+
+Note that the `topicmodels` package, which contains the most widely used `LDA` function, expects a document-term 
+matrix, rather than a tidy dataframe to train a model.  Luckily for us, `tidytext` contains helper functions 
+that allow us to go back and forth.
+
+Additionally, because we're going to train an LDA model based on term frequency, we'll drop stop words 
+in advance.
 
 ```{r}
-drop_repetition <- function(dat, n = 2) {
-  dat %>%
-    unnest_tokens(ngram, lyric, token = "ngrams", n = n) %>%
-    group_by(album_name, track_n, track_name, line) %>%
-    mutate(token_position = row_number()) %>%
-    ungroup() %>%
-    select(-line) %>%
-    distinct() %>%
-    select(-token_position)
-}
-
-rush_tf_idf <- function(tokenized_dat) {
-  album_ngrams <- tokenized_dat %>%
-    count(album_name, ngram, sort = TRUE) %>%
-    ungroup()
-
-  total_ngrams <- album_ngrams %>%
-    group_by(album_name) %>%
-    summarize(total = sum(n))
-
-  album_ngrams <- album_ngrams %>%
-    left_join(total_words, by = "album_name") %>%
-    bind_tf_idf(ngram, album_name, n) %>%
-    order_rush_albums()
+order_rush_albums_for_tracks <- function(dat) {
+  ## Helper function that orders Rush albums in order of 
+  ## release date.  Makes for displays that are ordered
+  ## chronologically.
   
-  return(album_ngrams)
+  album_num <- rush_albums %>%
+    filter(album_name != "Rush") %>% 
+    select(album_name, album_release_date) %>%
+    distinct() %>%
+    arrange(album_release_date) %>%
+    mutate(album_num = row_number()) %>%
+    select(-album_release_date)
+  
+  dat %>%
+    inner_join(album_num) %>%
+    mutate(album_name = fct_reorder(album_name, album_num)) %>%
+    select(-album_num)
 }
 
-bigram <- lyrics_dat %>%
-  drop_repetition(n = 2) %>%
-  rush_tf_idf() %>%
-  arrange(-tf_idf)
+track_words <- track_lyrics_dat %>%
+  unnest_tokens(word, lyric, strip_punct = TRUE) %>%
+  anti_join(stop_words) %>%
+  filter(!(word %in% c("heart", "closer", "half", "world"))) %>%  ## words that appear a LOT in a few songs
+  count(album_name, track_name, word, sort = TRUE) %>%
+  ungroup()
 
+total_track_words <- track_words %>%
+  group_by(track_name) %>%
+  summarize(total = sum(n))
 
-trigram <- lyrics_dat %>%
-  drop_repetition(n = 3) %>%
-  rush_tf_idf() %>%
-  arrange(-tf_idf)
-
-head(bigram)
-head(trigram)
+track_words <- track_words %>%
+  left_join(total_track_words, by = "track_name") %>%
+  bind_tf_idf(word, track_name, n) %>%
+  order_rush_albums_for_tracks
 ```
-
-Interesting.  When we look at bigrams, it looks like song titles are still the most common words.  "snow
-dog" on Fly By Night comes from "By-Tor and the Snow Dog", and presumably Rush does not have many songs 
-about snow dogs.  We also see "closer to" (still!) with a term frequency of three.  When we look at 
-trigrams, "closer to the" is towards the top.  We also see "caves of ice" which appears twice in Xanadu 
-from "A Farewell to Kings".
-
-It does not appear that many words appear across albums.  Nevertheless, let's make some plots and see 
-what comes up.
 
 ```{r}
-top_10_bigrams <- bigram %>%
-    arrange(desc(tf_idf)) %>%
-    mutate(ngram = factor(ngram, levels = rev(unique(ngram)))) %>%
-    group_by(album_name) %>%
-    top_n(10) %>%
-    ungroup()
+library(topicmodels)
+library(ldatuning)
 
-for (i in seq_len(3)) {
-  bigram %>%
-    ggplot(aes(ngram, tf_idf, fill = album_name)) +
-    geom_col(show.legend = FALSE) +
-    facet_wrap_paginate(~album_name, ncol = 2, nrow = 3, scales = "free", drop = TRUE, page = i) +
-    coord_flip()
-}
+## song -> tf_idf document-term matrix
+track_dtm <- track_words %>%
+  anti_join(stop_words) %>%
+  select(track_name, word, n) %>%
+  cast_dtm(track_name, word, n)
+
+print(track_dtm)
+
+## How many topics?
+## https://cran.r-project.org/web/packages/ldatuning/vignettes/topics.html
+
+## THIS WILL TAKE A WHILE.
+# num_topics <- FindTopicsNumber(album_dtm, 
+#                                topics = seq(from = 2, to = 10, by = 1),
+#                                metrics = c("CaoJuan2009", "Arun2010", "Deveaud2014"),
+#                                method = "VEM",
+#                                control = list(seed = 2112),
+#                                mc.cores = 4,
+#                                verbose = TRUE)
+
+track_lda <- LDA(track_dtm, k = 4, control = list(seed = 2112), method = "Gibbs")
+
+track_lda_topics <- tidy(track_lda, matrix = "beta")
 ```
 
-When we look at overall Rush albums, the words with the highest *tf-idf* are "money" and "big" 
-from Power Windows.  Presumably this is because the song "The Big Money" [repeats those words many 
-times](https://genius.com/Rush-the-big-money-lyrics).
-
-
-## Sentiment Analysis
-
-Using the wonderful `tidytext` package, which Rush albums are the
-happiest?  Which are the saddest?  First we need to tokenize the data.
+We now have four mysterious topics.  What do they represent?
 
 ```{r}
-tokenized_lyrics_dat <- lyrics_dat %>%
-    inner_join(album_num, by = "album_name") %>%
-    arrange(album_num) %>% 
-    group_by(album_name) %>%
-    arrange(line) %>% 
-    unnest_tokens(word, lyric)
-
-
-afinn <- get_sentiments("afinn")  ## a sentiments lexicon
-sentiments_dat <- tokenized_lyrics_dat %>%
-    inner_join(afinn, by = "word") %>%
-    replace_na(list(score = 0))
+track_lda_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(x = term, y = beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()
 ```
 
-Which Rush albums are most positive?  Which are most negative?
+The topics are:
 
-```{r}
-sentiments_dat %>%
-    group_by(album_name, word) %>%
-    count(sort = TRUE)
-```
+1.  
